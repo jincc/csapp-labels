@@ -20,6 +20,7 @@ INT
 /bin/echo tsh> jobs
 jobs
 
+SLEEP 1
 /bin/echo tsh> fg %1
 fg %1
 

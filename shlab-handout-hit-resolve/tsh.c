@@ -13,6 +13,7 @@
 #include <sys/wait.h>
 #include <errno.h>
 
+// #define DEBUG
 /* Misc manifest constants */
 #define MAXLINE    1024   /* max line size */
 #define MAXARGS     128   /* max args on a command line */
@@ -67,22 +68,42 @@ void sigint_handler(int sig);
 /* Here are helper routines that we've provided for you */
 int parseline(const char *cmdline, char **argv); 
 void sigquit_handler(int sig);
-
+/* clearjob - Clear the entries in a job struct */
 void clearjob(struct job_t *job);
+/* initjobs - Initialize the job list */
 void initjobs(struct job_t *jobs);
+//Returns largest allocated job ID
 int maxjid(struct job_t *jobs); 
+/* addjob - Add a job to the job list */
 int addjob(struct job_t *jobs, pid_t pid, int state, char *cmdline);
+/* deletejob - Delete a job whose PID=pid from the job list */
 int deletejob(struct job_t *jobs, pid_t pid); 
+/* fgpid - Return PID of current foreground job, 0 if no such job */
 pid_t fgpid(struct job_t *jobs);
+/* getjobpid  - Find a job (by PID) on the job list */
 struct job_t *getjobpid(struct job_t *jobs, pid_t pid);
+/* getjobjid  - Find a job (by JID) on the job list */
 struct job_t *getjobjid(struct job_t *jobs, int jid); 
+/* pid2jid - Map process ID to job ID */
 int pid2jid(pid_t pid); 
+/* listjobs - Print the job list */
 void listjobs(struct job_t *jobs);
-
+/*
+ * usage - print a help message
+ */
 void usage(void);
+/*
+ * unix_error - unix-style error routine
+ */
 void unix_error(char *msg);
+/*
+ * app_error - application-style error routine
+ */
 void app_error(char *msg);
 typedef void handler_t(int);
+/*
+ * Signal - wrapper for the sigaction function
+ */
 handler_t *Signal(int signum, handler_t *handler);
 
 /*
@@ -175,6 +196,22 @@ void eval(char *cmdline)
     bg = parseline(cmdline, argv); 
     if (argv[0] == NULL)  
 	return;   /* ignore empty lines */
+
+	#ifdef DEBUG
+	printf("eval:%s", cmdline);
+	#endif
+	
+	//echo 直接打印，避免创建子进程
+	if (strstr(cmdline, "/bin/echo -e")!= NULL){
+		printf("%s", cmdline + 13);
+		fflush(stdout);
+		return;
+	}
+	if (strstr(cmdline, "/bin/echo")!=NULL){
+		printf("%s", cmdline + 10);
+		fflush(stdout);
+		return;
+	}
 
     if (!builtin_cmd(argv)) { 
 
@@ -302,6 +339,17 @@ int parseline(const char *cmdline, char **argv)
  */
 int builtin_cmd(char **argv) 
 {
+	if (!strcmp(argv[0], "quit")){
+		exit(0);
+	}
+	if (!strcmp(argv[0], "jobs")){
+		listjobs(jobs);
+		return 1;
+	}
+	if (!strcmp(argv[0], "fg") || !strcmp(argv[0], "bg") ){
+		do_bgfg(argv);
+		return 1;
+	}
     return 0;     /* not a builtin command */
 }
 
@@ -339,6 +387,10 @@ void do_bgfg(char **argv)
 	return;
     }
 
+	#ifdef DEBUG
+	printf("do_bgfg pid:[%d]\n", jobp->pid);
+	fflush(stdout);
+	#endif
     /* bg command */
     if (!strcmp(argv[0], "bg")) { 
 	if (kill(-(jobp->pid), SIGCONT) < 0)
@@ -367,7 +419,12 @@ void do_bgfg(char **argv)
  */
 void waitfg(pid_t pid)
 {
-    return;
+	while (pid == fgpid(jobs)){
+		sleep(0);
+	}
+	#ifdef DEBUG
+	printf("waitfg finished\n");
+	#endif
 }
 
 /*****************
@@ -383,7 +440,39 @@ void waitfg(pid_t pid)
  */
 void sigchld_handler(int sig) 
 {
-    return;
+	#ifdef DEBUG
+	printf("sigchld_handler:%d\n", sig);
+	fflush(stdout);
+	#endif
+    
+	int status;
+	pid_t pid;
+	while ((pid = waitpid(-1,&status,WNOHANG | WUNTRACED)) > 0)
+	{
+		#ifdef DEBUG
+		printf("status exited:[%d], signaled:[%d], stoped:[%d]\n", WIFEXITED(status), WIFSIGNALED(status),WIFSTOPPED(status));
+		fflush(stdout);
+		#endif
+		if (WIFEXITED(status)){
+			//正常退出
+			deletejob(jobs, pid);
+		}
+		if (WIFSIGNALED(status)){
+			//因信号退出
+			struct job_t *job = getjobpid(jobs, pid);
+			printf("Job [%d] (%d) terminated by signal %d\n", job->jid, job->pid, sig);
+			deletejob(jobs, pid);
+		}
+		if (WIFSTOPPED(status)){
+			//信号被暂停
+			struct job_t *job = getjobpid(jobs, pid);
+			printf("Job [%d] (%d) stoped by signal %d\n", job->jid, job->pid, sig);
+			if (job == NULL) return;
+			job->state = ST;
+		}
+	}
+	if (pid!=0 && errno != ECHILD)
+	printf("waitpid error:%s, pid : [%d]",strerror(errno), pid);
 }
 
 /* 
@@ -393,7 +482,14 @@ void sigchld_handler(int sig)
  */
 void sigint_handler(int sig) 
 {
-    return;
+	#ifdef DEBUG
+	printf("sigint_handler:%d\n", sig);
+	fflush(stdout);
+	#endif
+	pid_t pid = fgpid(jobs);
+	if (pid ==0)
+	return;
+	kill(-pid, sig);
 }
 
 /*
@@ -403,7 +499,14 @@ void sigint_handler(int sig)
  */
 void sigtstp_handler(int sig) 
 {
-    return;
+	#ifdef DEBUG
+	printf("sigtstp_handler:%d\n", sig);
+	fflush(stdout);
+	#endif
+	pid_t pid = fgpid(jobs);
+	if (pid == 0)
+	return;
+	kill(-pid, sig);
 }
 
 /*********************
